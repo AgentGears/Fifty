@@ -4,7 +4,6 @@ import (
 	"context"
 	"math"
 	"sync"
-	"sync/atomic"
 
 	"fifty/kernel/identity"
 	"fifty/ports"
@@ -46,22 +45,18 @@ func (s *MemoryStore) WithinTransaction(ctx context.Context, fn func(ports.Trans
 
 	tx := &memoryTransaction{records: cloneRecords(s.records)}
 	callbackErr := fn(tx)
-	// Close the capability immediately when the callback returns, before any
-	// commit decision, so work started after callback lifetime cannot race the
-	// transaction close and enter committed state.
-	tx.closed.Store(true)
+	activeAtClose := tx.close()
 	if callbackErr != nil {
 		return callbackErr
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-
-	committed, err := tx.snapshotClosed()
-	if err != nil {
-		return err
+	if activeAtClose != 0 {
+		return ports.ErrTransactionInFlight
 	}
-	s.records = committed
+
+	s.records = tx.snapshot()
 	return nil
 }
 
@@ -82,15 +77,23 @@ func (s *MemoryStore) Read(workspaceID identity.ID, kind string, id identity.ID)
 }
 
 type memoryTransaction struct {
-	mu      sync.Mutex
-	records map[recordKey]ports.Record
-	closed  atomic.Bool
+	lifecycleMu sync.Mutex
+	closed      bool
+	active      int
+
+	recordsMu sync.Mutex
+	records   map[recordKey]ports.Record
 }
 
 func (tx *memoryTransaction) Load(ctx context.Context, workspaceID identity.ID, kind string, id identity.ID) (ports.Record, error) {
-	tx.mu.Lock()
-	defer tx.mu.Unlock()
-	if err := tx.ensureOpen(ctx); err != nil {
+	if err := tx.begin(ctx); err != nil {
+		return ports.Record{}, err
+	}
+	defer tx.end()
+
+	tx.recordsMu.Lock()
+	defer tx.recordsMu.Unlock()
+	if err := tx.ensureOpenAfterBegin(ctx); err != nil {
 		return ports.Record{}, err
 	}
 	if err := validateKey(workspaceID, kind, id); err != nil {
@@ -104,9 +107,14 @@ func (tx *memoryTransaction) Load(ctx context.Context, workspaceID identity.ID, 
 }
 
 func (tx *memoryTransaction) Insert(ctx context.Context, record ports.Record) error {
-	tx.mu.Lock()
-	defer tx.mu.Unlock()
-	if err := tx.ensureOpen(ctx); err != nil {
+	if err := tx.begin(ctx); err != nil {
+		return err
+	}
+	defer tx.end()
+
+	tx.recordsMu.Lock()
+	defer tx.recordsMu.Unlock()
+	if err := tx.ensureOpenAfterBegin(ctx); err != nil {
 		return err
 	}
 	if err := validateRecord(record); err != nil {
@@ -125,9 +133,14 @@ func (tx *memoryTransaction) Insert(ctx context.Context, record ports.Record) er
 }
 
 func (tx *memoryTransaction) ReplaceIfVersion(ctx context.Context, record ports.Record, expected uint64) error {
-	tx.mu.Lock()
-	defer tx.mu.Unlock()
-	if err := tx.ensureOpen(ctx); err != nil {
+	if err := tx.begin(ctx); err != nil {
+		return err
+	}
+	defer tx.end()
+
+	tx.recordsMu.Lock()
+	defer tx.recordsMu.Unlock()
+	if err := tx.ensureOpenAfterBegin(ctx); err != nil {
 		return err
 	}
 	if err := validateRecord(record); err != nil {
@@ -153,9 +166,14 @@ func (tx *memoryTransaction) ReplaceIfVersion(ctx context.Context, record ports.
 }
 
 func (tx *memoryTransaction) DeleteIfVersion(ctx context.Context, workspaceID identity.ID, kind string, id identity.ID, expected uint64) error {
-	tx.mu.Lock()
-	defer tx.mu.Unlock()
-	if err := tx.ensureOpen(ctx); err != nil {
+	if err := tx.begin(ctx); err != nil {
+		return err
+	}
+	defer tx.end()
+
+	tx.recordsMu.Lock()
+	defer tx.recordsMu.Unlock()
+	if err := tx.ensureOpenAfterBegin(ctx); err != nil {
 		return err
 	}
 	if err := validateKey(workspaceID, kind, id); err != nil {
@@ -173,23 +191,48 @@ func (tx *memoryTransaction) DeleteIfVersion(ctx context.Context, workspaceID id
 	return nil
 }
 
-func (tx *memoryTransaction) ensureOpen(ctx context.Context) error {
-	if tx.closed.Load() {
-		return ports.ErrTransactionClosed
-	}
+func (tx *memoryTransaction) begin(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	tx.lifecycleMu.Lock()
+	defer tx.lifecycleMu.Unlock()
+	if tx.closed {
+		return ports.ErrTransactionClosed
+	}
+	tx.active++
+	return nil
+}
+
+func (tx *memoryTransaction) end() {
+	tx.lifecycleMu.Lock()
+	defer tx.lifecycleMu.Unlock()
+	tx.active--
+}
+
+func (tx *memoryTransaction) ensureOpenAfterBegin(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	tx.lifecycleMu.Lock()
+	defer tx.lifecycleMu.Unlock()
+	if tx.closed {
+		return ports.ErrTransactionClosed
 	}
 	return nil
 }
 
-func (tx *memoryTransaction) snapshotClosed() (map[recordKey]ports.Record, error) {
-	tx.mu.Lock()
-	defer tx.mu.Unlock()
-	if !tx.closed.Load() {
-		return nil, ports.ErrInvalid
-	}
-	return cloneRecords(tx.records), nil
+func (tx *memoryTransaction) close() int {
+	tx.lifecycleMu.Lock()
+	defer tx.lifecycleMu.Unlock()
+	tx.closed = true
+	return tx.active
+}
+
+func (tx *memoryTransaction) snapshot() map[recordKey]ports.Record {
+	tx.recordsMu.Lock()
+	defer tx.recordsMu.Unlock()
+	return cloneRecords(tx.records)
 }
 
 func validateRecord(record ports.Record) error {
