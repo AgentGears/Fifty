@@ -8,13 +8,13 @@ import (
 )
 
 var (
-	ErrNotFound             = errors.New("canonical record not found")
-	ErrConflict             = errors.New("canonical record version conflict")
-	ErrUnavailable          = errors.New("canonical store unavailable")
-	ErrInvalid              = errors.New("invalid canonical record")
-	ErrVersionExhausted     = errors.New("canonical record version exhausted")
-	ErrTransactionClosed    = errors.New("canonical transaction is closed")
-	ErrTransactionInFlight  = errors.New("canonical transaction has an in-flight operation at close")
+	ErrNotFound            = errors.New("canonical record not found")
+	ErrConflict            = errors.New("canonical record version conflict")
+	ErrUnavailable         = errors.New("canonical store unavailable")
+	ErrInvalid             = errors.New("invalid canonical record")
+	ErrVersionExhausted    = errors.New("canonical record version exhausted")
+	ErrTransactionClosed   = errors.New("canonical transaction is closed")
+	ErrTransactionInFlight = errors.New("canonical transaction has an in-flight operation at close")
 )
 
 type Record struct {

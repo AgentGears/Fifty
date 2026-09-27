@@ -44,8 +44,12 @@ func (s *MemoryStore) WithinTransaction(ctx context.Context, fn func(ports.Trans
 	}
 
 	tx := &memoryTransaction{records: cloneRecords(s.records)}
-	callbackErr := fn(tx)
-	activeAtClose := tx.close()
+	var callbackErr error
+	var activeAtClose int
+	func() {
+		defer func() { activeAtClose = tx.close() }()
+		callbackErr = fn(tx)
+	}()
 	if callbackErr != nil {
 		return callbackErr
 	}
