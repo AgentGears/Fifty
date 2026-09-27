@@ -66,7 +66,7 @@ func TestMemoryStoreClosesLeakedTransactionWhenCallbackPanics(t *testing.T) {
 	record := testRecord(t, "00000000000000000000000000000001", "00000000000000000000000000000002", "before")
 
 	var leaked ports.Transaction
-	var recovered any
+	var recovered interface{}
 	func() {
 		defer func() { recovered = recover() }()
 		_ = store.WithinTransaction(ctx, func(tx ports.Transaction) error {
