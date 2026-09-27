@@ -42,5 +42,8 @@ func (g *ControlledIdentifiers) New() (identity.ID, error) {
 	}
 	value := g.items[g.next]
 	g.next++
+	if value.IsZero() {
+		return identity.ID{}, identity.ErrInvalid
+	}
 	return value, nil
 }

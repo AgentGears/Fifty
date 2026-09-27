@@ -24,30 +24,50 @@ func (r Report) Passed() bool {
 	if len(r.Results) == 0 {
 		return false
 	}
+	executed := false
 	for _, result := range r.Results {
 		if !result.Passed {
 			return false
 		}
+		if !result.Skipped {
+			executed = true
+		}
 	}
-	return true
+	return executed
 }
 
 func RunScenarios(ctx context.Context, scenarios []Scenario) Report {
-	report := Report{Results: make([]ScenarioResult, 0, len(scenarios))}
+	report := Report{Results: make([]ScenarioResult, len(scenarios))}
 	seen := make(map[string]struct{}, len(scenarios))
-	for _, scenario := range scenarios {
-		result := ScenarioResult{ID: scenario.ID}
-		if scenario.ID == "" {
-			result.Error = "scenario id is required"
-			report.Results = append(report.Results, result)
+	invalid := false
+
+	// Preflight the pack before any runner executes so malformed metadata cannot
+	// partially mutate shared fixtures.
+	for i, scenario := range scenarios {
+		report.Results[i].ID = scenario.ID
+		switch {
+		case scenario.ID == "":
+			report.Results[i].Error = "scenario id is required"
+			invalid = true
+		default:
+			if _, exists := seen[scenario.ID]; exists {
+				report.Results[i].Error = "scenario id is duplicated"
+				invalid = true
+			} else {
+				seen[scenario.ID] = struct{}{}
+			}
+		}
+	}
+	if invalid {
+		return report
+	}
+
+	for i, scenario := range scenarios {
+		result := &report.Results[i]
+		if err := ctx.Err(); err != nil {
+			result.Error = err.Error()
 			continue
 		}
-		if _, exists := seen[scenario.ID]; exists {
-			result.Error = "scenario id is duplicated"
-			report.Results = append(report.Results, result)
-			continue
-		}
-		seen[scenario.ID] = struct{}{}
 		if scenario.Run == nil {
 			result.Skipped = true
 			if scenario.Required {
@@ -55,15 +75,17 @@ func RunScenarios(ctx context.Context, scenarios []Scenario) Report {
 			} else {
 				result.Passed = true
 			}
-			report.Results = append(report.Results, result)
 			continue
 		}
 		if err := scenario.Run(ctx); err != nil {
 			result.Error = err.Error()
-		} else {
-			result.Passed = true
+			continue
 		}
-		report.Results = append(report.Results, result)
+		if err := ctx.Err(); err != nil {
+			result.Error = err.Error()
+			continue
+		}
+		result.Passed = true
 	}
 	return report
 }

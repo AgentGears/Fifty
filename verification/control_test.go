@@ -34,3 +34,10 @@ func TestControlledIdentifiers(t *testing.T) {
 		t.Fatalf("exhaustion: got %v", err)
 	}
 }
+
+func TestControlledIdentifiersRejectZero(t *testing.T) {
+	ids := NewControlledIdentifiers(identity.ID{})
+	if _, err := ids.New(); !errors.Is(err, identity.ErrInvalid) {
+		t.Fatalf("zero identifier: got %v want invalid", err)
+	}
+}
