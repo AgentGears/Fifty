@@ -1,9 +1,11 @@
 package workspace
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"time"
 
 	"fifty/kernel/identity"
@@ -117,7 +119,7 @@ func decodeWorkspace(record ports.Record) (Workspace, error) {
 		return Workspace{}, ErrInvalidCanonicalState
 	}
 	var wire workspaceWire
-	if err := json.Unmarshal(record.Payload, &wire); err != nil {
+	if err := decodeStrictJSON(record.Payload, &wire); err != nil {
 		return Workspace{}, ErrInvalidCanonicalState
 	}
 	id, err := identity.Parse(wire.WorkspaceID)
@@ -189,7 +191,7 @@ func decodePrincipal(record ports.Record) (Principal, error) {
 		return Principal{}, ErrInvalidCanonicalState
 	}
 	var wire principalWire
-	if err := json.Unmarshal(record.Payload, &wire); err != nil {
+	if err := decodeStrictJSON(record.Payload, &wire); err != nil {
 		return Principal{}, ErrInvalidCanonicalState
 	}
 	id, err := identity.Parse(wire.PrincipalID)
@@ -229,7 +231,9 @@ func decodePrincipal(record ports.Record) (Principal, error) {
 }
 
 func validateWorkspace(value Workspace) error {
-	if value.ID.IsZero() || value.HumanPrincipalID.IsZero() || value.PrimaryAssistantPrincipalID.IsZero() || value.HumanPrincipalID == value.PrimaryAssistantPrincipalID {
+	if value.ID.IsZero() || value.HumanPrincipalID.IsZero() || value.PrimaryAssistantPrincipalID.IsZero() ||
+		value.ID == value.HumanPrincipalID || value.ID == value.PrimaryAssistantPrincipalID ||
+		value.HumanPrincipalID == value.PrimaryAssistantPrincipalID {
 		return ErrInvalidCanonicalState
 	}
 	if value.CreatedAt.IsZero() || value.Version == 0 || value.RetentionPolicyRef == "" || value.AccessGeneration == 0 || value.RecoveryGeneration == 0 {
@@ -247,7 +251,7 @@ func validateWorkspace(value Workspace) error {
 }
 
 func validatePrincipal(value Principal) error {
-	if value.ID.IsZero() || value.WorkspaceID.IsZero() || value.CreatedAt.IsZero() || value.Version == 0 {
+	if value.ID.IsZero() || value.WorkspaceID.IsZero() || value.ID == value.WorkspaceID || value.CreatedAt.IsZero() || value.Version == 0 {
 		return ErrInvalidCanonicalState
 	}
 	switch value.Kind {
@@ -281,4 +285,17 @@ func parseDigest(value string) (digest, error) {
 		return digest{}, ErrInvalidCanonicalState
 	}
 	return result, nil
+}
+
+func decodeStrictJSON(data []byte, target interface{}) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra interface{}
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return ErrInvalidCanonicalState
+	}
+	return nil
 }

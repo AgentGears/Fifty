@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,6 +15,18 @@ import (
 )
 
 type fixedClock struct{ value time.Time }
+
+type uncertainCommitStore struct {
+	inner ports.Store
+}
+
+func (s uncertainCommitStore) WithinTransaction(ctx context.Context, fn func(ports.Transaction) error) error {
+	err := s.inner.WithinTransaction(ctx, fn)
+	if err != nil {
+		return err
+	}
+	return ports.ErrCommitUncertain
+}
 
 func (c fixedClock) Now() time.Time { return c.value }
 
@@ -109,11 +123,19 @@ func TestRecoveryPreservesPrincipalAndRevokesPriorCredentials(t *testing.T) {
 	if resolvedWorkspace.ID != workspace.ID || resolvedHuman.ID != human.ID {
 		t.Fatal("replacement access resolved to a different canonical identity")
 	}
+	loadedWorkspace, _, assistant, err := service.Load(ctx, workspace.ID)
+	if err != nil {
+		t.Fatalf("load after recovery: %v", err)
+	}
+	if loadedWorkspace.PrimaryAssistantPrincipalID != assistant.ID {
+		t.Fatal("recovery changed primary-assistant semantic identity")
+	}
 }
 
 func TestRawCredentialValuesNeverEnterCanonicalPayload(t *testing.T) {
 	ctx := context.Background()
-	store, err := persistence.Open(t.TempDir())
+	dir := t.TempDir()
+	store, err := persistence.Open(dir)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -134,6 +156,13 @@ func TestRawCredentialValuesNeverEnterCanonicalPayload(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("inspect canonical payload: %v", err)
 	}
+	snapshot, err := os.ReadFile(filepath.Join(dir, "snapshot.json"))
+	if err != nil {
+		t.Fatalf("read persisted snapshot: %v", err)
+	}
+	if bytes.Contains(snapshot, []byte(credentials.Access)) || bytes.Contains(snapshot, []byte(credentials.Recovery)) {
+		t.Fatal("raw credential value was persisted in the canonical snapshot")
+	}
 }
 
 func TestMalformedAndUnknownCredentialsFailClosed(t *testing.T) {
@@ -148,5 +177,72 @@ func TestMalformedAndUnknownCredentialsFailClosed(t *testing.T) {
 	}
 	if _, _, _, err := service.Recover(ctx, "not-a-credential"); !errors.Is(err, ErrRecoveryDenied) {
 		t.Fatalf("malformed recovery credential did not fail closed: %v", err)
+	}
+}
+
+func TestInitializeRetainsIssuedCredentialsWhenCommitOutcomeIsUncertain(t *testing.T) {
+	ctx := context.Background()
+	inner, err := persistence.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	service := newTestService(t, uncertainCommitStore{inner: inner})
+	workspace, human, assistant, credentials, err := service.Initialize(ctx)
+	if !errors.Is(err, ports.ErrCommitUncertain) {
+		t.Fatalf("expected commit uncertainty, got %v", err)
+	}
+	if workspace.ID.IsZero() || human.ID.IsZero() || assistant.ID.IsZero() {
+		t.Fatal("uncertain initialization discarded canonical identity results")
+	}
+	if credentials.Access == "" || credentials.Recovery == "" {
+		t.Fatal("uncertain initialization discarded issued credentials")
+	}
+
+	committed := newTestService(t, inner)
+	resolvedWorkspace, resolvedHuman, resolveErr := committed.ResolveAccess(ctx, credentials.Access)
+	if resolveErr != nil {
+		t.Fatalf("issued access credential did not resolve after uncertain commit: %v", resolveErr)
+	}
+	if resolvedWorkspace.ID != workspace.ID || resolvedHuman.ID != human.ID {
+		t.Fatal("uncertain initialization credentials do not identify committed canonical state")
+	}
+}
+
+func TestCanonicalObjectsRejectSharedSemanticIdentifiers(t *testing.T) {
+	workspaceID, err := identity.Parse("11111111111111111111111111111111")
+	if err != nil {
+		t.Fatalf("parse workspace id: %v", err)
+	}
+	assistantID, err := identity.Parse("22222222222222222222222222222222")
+	if err != nil {
+		t.Fatalf("parse assistant id: %v", err)
+	}
+	now := time.Date(2026, 9, 28, 20, 30, 0, 0, time.UTC)
+	invalidWorkspace := Workspace{
+		ID:                          workspaceID,
+		HumanPrincipalID:            workspaceID,
+		PrimaryAssistantPrincipalID: assistantID,
+		State:                       WorkspaceActive,
+		CreatedAt:                   now,
+		RetentionPolicyRef:          InitialRetentionPolicyRef,
+		Version:                     1,
+		accessDigest:                tokenDigest(accessCredentialDomain, []byte("access")),
+		recoveryDigest:              tokenDigest(recoveryCredentialDomain, []byte("recovery")),
+		AccessGeneration:            1,
+		RecoveryGeneration:          1,
+	}
+	if err := validateWorkspace(invalidWorkspace); !errors.Is(err, ErrInvalidCanonicalState) {
+		t.Fatalf("workspace accepted an identifier shared with a principal: %v", err)
+	}
+	invalidPrincipal := Principal{
+		ID:          workspaceID,
+		WorkspaceID: workspaceID,
+		Kind:        PrincipalHuman,
+		State:       PrincipalActive,
+		CreatedAt:   now,
+		Version:     1,
+	}
+	if err := validatePrincipal(invalidPrincipal); !errors.Is(err, ErrInvalidCanonicalState) {
+		t.Fatalf("principal accepted the workspace identifier as its own: %v", err)
 	}
 }

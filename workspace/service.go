@@ -47,21 +47,20 @@ func NewService(store ports.Store, ids identity.Generator, source clock.Clock) (
 	return &Service{store: store, ids: ids, clock: source, entropy: rand.Reader}, nil
 }
 
+// Initialize performs the one-time enrollment transaction for the initial personal Workspace.
+// Product surfaces must not expose it as a repeatable workspace-creation operation.
 func (s *Service) Initialize(ctx context.Context) (Workspace, Principal, Principal, Credentials, error) {
-	workspaceID, err := s.ids.New()
+	workspaceID, err := s.newDistinctID()
 	if err != nil {
 		return Workspace{}, Principal{}, Principal{}, Credentials{}, err
 	}
-	humanID, err := s.ids.New()
+	humanID, err := s.newDistinctID(workspaceID)
 	if err != nil {
 		return Workspace{}, Principal{}, Principal{}, Credentials{}, err
 	}
-	assistantID, err := s.ids.New()
+	assistantID, err := s.newDistinctID(workspaceID, humanID)
 	if err != nil {
 		return Workspace{}, Principal{}, Principal{}, Credentials{}, err
-	}
-	if workspaceID.IsZero() || humanID.IsZero() || assistantID.IsZero() || humanID == assistantID {
-		return Workspace{}, Principal{}, Principal{}, Credentials{}, ports.ErrInvalid
 	}
 
 	accessToken, accessDigest, err := s.issueToken(workspaceID, accessCredentialDomain)
@@ -126,11 +125,15 @@ func (s *Service) Initialize(ctx context.Context) (Workspace, Principal, Princip
 		}
 		return tx.Insert(ctx, ports.Record{WorkspaceID: workspaceID, Kind: PrincipalRecordKind, ID: assistantID, Payload: assistantPayload})
 	})
+	credentials := Credentials{Access: accessToken, Recovery: recoveryToken}
 	if err != nil {
+		if errors.Is(err, ports.ErrCommitUncertain) {
+			return workspace, human, assistant, credentials, err
+		}
 		return Workspace{}, Principal{}, Principal{}, Credentials{}, err
 	}
 
-	return workspace, human, assistant, Credentials{Access: accessToken, Recovery: recoveryToken}, nil
+	return workspace, human, assistant, credentials, nil
 }
 
 func (s *Service) Load(ctx context.Context, workspaceID identity.ID) (Workspace, Principal, Principal, error) {
@@ -239,7 +242,7 @@ func (s *Service) Recover(ctx context.Context, token string) (Workspace, Princip
 		if workspace.State != WorkspaceActive || !equalDigest(workspace.recoveryDigest, presented) {
 			return ErrRecoveryDenied
 		}
-		if record.Version == math.MaxUint64 {
+		if record.Version == math.MaxUint64 || workspace.AccessGeneration == math.MaxUint64 || workspace.RecoveryGeneration == math.MaxUint64 {
 			return ports.ErrVersionExhausted
 		}
 
@@ -285,9 +288,36 @@ func (s *Service) Recover(ctx context.Context, token string) (Workspace, Princip
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, ports.ErrCommitUncertain) && nextCredentials.Access != "" && nextCredentials.Recovery != "" {
+			return workspace, human, nextCredentials, err
+		}
 		return Workspace{}, Principal{}, Credentials{}, err
 	}
 	return workspace, human, nextCredentials, nil
+}
+
+func (s *Service) newDistinctID(existing ...identity.ID) (identity.ID, error) {
+	const maxAttempts = 8
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		id, err := s.ids.New()
+		if err != nil {
+			return identity.ID{}, err
+		}
+		if id.IsZero() {
+			continue
+		}
+		duplicate := false
+		for _, current := range existing {
+			if id == current {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			return id, nil
+		}
+	}
+	return identity.ID{}, ports.ErrInvalid
 }
 
 func validateWorkspacePrincipals(workspace Workspace, human Principal, assistant Principal) error {

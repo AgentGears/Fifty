@@ -15,6 +15,7 @@ var (
 	ErrVersionExhausted    = errors.New("canonical record version exhausted")
 	ErrTransactionClosed   = errors.New("canonical transaction is closed")
 	ErrTransactionInFlight = errors.New("canonical transaction has an in-flight operation at close")
+	ErrCommitUncertain     = errors.New("canonical transaction commit outcome uncertain")
 )
 
 type Record struct {
