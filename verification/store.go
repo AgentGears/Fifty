@@ -15,15 +15,23 @@ type recordKey struct {
 	id          identity.ID
 }
 
+// MemoryStore is a verification-only canonical-store substitute.
+// Transaction callbacks are serialized. Read is the only MemoryStore method
+// intended for use from a callback, and it observes only committed state.
+// Callbacks must use the supplied Transaction for mutation and must not call
+// WithinTransaction or SetUnavailable recursively.
 type MemoryStore struct {
-	mu          sync.RWMutex
-	records     map[recordKey]ports.Record
-	unavailable bool
+	transactionMu sync.Mutex
+	mu            sync.RWMutex
+	records       map[recordKey]ports.Record
+	unavailable   bool
 }
 
 func NewMemoryStore() *MemoryStore { return &MemoryStore{records: make(map[recordKey]ports.Record)} }
 
 func (s *MemoryStore) SetUnavailable(value bool) {
+	s.transactionMu.Lock()
+	defer s.transactionMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.unavailable = value
@@ -37,13 +45,21 @@ func (s *MemoryStore) WithinTransaction(ctx context.Context, fn func(ports.Trans
 		return ports.ErrInvalid
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.unavailable {
-		return ports.ErrUnavailable
+	s.transactionMu.Lock()
+	defer s.transactionMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
-	tx := &memoryTransaction{records: cloneRecords(s.records)}
+	s.mu.RLock()
+	if s.unavailable {
+		s.mu.RUnlock()
+		return ports.ErrUnavailable
+	}
+	committed := cloneRecords(s.records)
+	s.mu.RUnlock()
+
+	tx := &memoryTransaction{records: committed}
 	var callbackErr error
 	var activeAtClose int
 	func() {
@@ -60,7 +76,13 @@ func (s *MemoryStore) WithinTransaction(ctx context.Context, fn func(ports.Trans
 		return ports.ErrTransactionInFlight
 	}
 
-	s.records = tx.snapshot()
+	next := tx.snapshot()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.unavailable {
+		return ports.ErrUnavailable
+	}
+	s.records = next
 	return nil
 }
 
