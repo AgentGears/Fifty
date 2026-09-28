@@ -103,6 +103,9 @@ func (s *MemoryStore) WithinTransaction(ctx context.Context, fn func(ports.Trans
 	next := tx.snapshot()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s.unavailable {
 		return ports.ErrUnavailable
 	}
