@@ -3,6 +3,7 @@ package verification
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -37,6 +38,23 @@ func TestScenarioFailureCannotPass(t *testing.T) {
 	report := RunScenarios(context.Background(), []Scenario{{ID: "broken", Required: true, Run: func(context.Context) error { return errors.New("broken invariant") }}})
 	if report.Passed() {
 		t.Fatal("failing scenario must not pass")
+	}
+}
+
+func TestScenarioPanicBecomesFailureAndLaterScenarioRuns(t *testing.T) {
+	laterRan := false
+	report := RunScenarios(context.Background(), []Scenario{
+		{ID: "panic", Required: true, Run: func(context.Context) error { panic("boom") }},
+		{ID: "later", Required: true, Run: func(context.Context) error { laterRan = true; return nil }},
+	})
+	if report.Passed() {
+		t.Fatalf("panicking scenario must not pass: %+v", report)
+	}
+	if !strings.Contains(report.Results[0].Error, "scenario panic") {
+		t.Fatalf("panic was not recorded as scenario failure: %+v", report.Results[0])
+	}
+	if !laterRan || !report.Results[1].Passed {
+		t.Fatalf("later scenario did not execute after contained panic: %+v", report)
 	}
 }
 

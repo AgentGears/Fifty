@@ -7,8 +7,8 @@ It contains:
 - opaque semantic identifier primitives;
 - controllable time and identifier sources for deterministic verification;
 - the transactional canonical-store port;
-- an in-memory verification store with rollback, transaction-lifetime, and stale-version behavior;
-- a scenario runner with fail-closed cancellation and non-vacuous qualification semantics;
+- an in-memory verification store with rollback, transaction-lifetime, stale-version, and context-cancelable serialization behavior;
+- a scenario runner with fail-closed cancellation, panic containment, and non-vacuous qualification semantics;
 - the minimal project module manifest needed for a clean checkout to resolve intra-project packages.
 
 It deliberately does not contain Workspace, Principal, Interaction, specialist, work, memory, background execution, or external-effect implementations.
@@ -26,5 +26,9 @@ Before this increment can merge, the commit-bound verification evidence must inc
 - exhaustive first-pass maintainer review;
 - independent secondary review or an explicitly separated fallback secondary pass;
 - reconciliation of both review passes.
+
+Scenario runners execute synchronously and must honor context cancellation. The in-process harness does not abandon a timed-out runner in a background goroutine because that runner could continue mutating verification fixtures after failure was reported. A non-cooperative hang must therefore be bounded by a process-level wall-clock watchdog at the external verification boundary, where termination and failure evidence can be handled without claiming the scenario itself was safely stopped.
+
+The in-memory `Report` is the deterministic semantic result of scenario execution. Durable verification receipts and artifacts are produced by the external commit-bound verification boundary rather than by this bootstrap runner.
 
 No local-only wrapper or unrecorded source file may be required to compile the checked-in code.

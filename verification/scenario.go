@@ -77,7 +77,7 @@ func RunScenarios(ctx context.Context, scenarios []Scenario) Report {
 			}
 			continue
 		}
-		if err := scenario.Run(ctx); err != nil {
+		if err := runScenario(ctx, scenario.Run); err != nil {
 			result.Error = err.Error()
 			continue
 		}
@@ -88,6 +88,15 @@ func RunScenarios(ctx context.Context, scenarios []Scenario) Report {
 		result.Passed = true
 	}
 	return report
+}
+
+func runScenario(ctx context.Context, run func(context.Context) error) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("scenario panic: %v", recovered)
+		}
+	}()
+	return run(ctx)
 }
 
 func RequirePassed(report Report) error {

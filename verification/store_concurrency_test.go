@@ -112,7 +112,18 @@ func TestMemoryStoreSerializesTransactionCallbacks(t *testing.T) {
 	}
 }
 
-func TestMemoryStoreCancellationWhileWaitingDoesNotEnterCallback(t *testing.T) {
+type observedCancelContext struct {
+	context.Context
+	doneObserved chan struct{}
+	once         sync.Once
+}
+
+func (c *observedCancelContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.doneObserved) })
+	return c.Context.Done()
+}
+
+func TestMemoryStoreCancellationWhileWaitingReturnsPromptly(t *testing.T) {
 	store := NewMemoryStore()
 	firstEntered := make(chan struct{})
 	releaseFirst := make(chan struct{})
@@ -127,7 +138,8 @@ func TestMemoryStoreCancellationWhileWaitingDoesNotEnterCallback(t *testing.T) {
 	}()
 	<-firstEntered
 
-	ctx, cancel := context.WithCancel(context.Background())
+	base, cancel := context.WithCancel(context.Background())
+	ctx := &observedCancelContext{Context: base, doneObserved: make(chan struct{})}
 	callbackEntered := make(chan struct{}, 1)
 	secondDone := make(chan error, 1)
 	go func() {
@@ -136,18 +148,30 @@ func TestMemoryStoreCancellationWhileWaitingDoesNotEnterCallback(t *testing.T) {
 			return nil
 		})
 	}()
-	cancel()
-	close(releaseFirst)
 
-	if err := <-firstDone; err != nil {
-		t.Fatalf("first transaction: %v", err)
+	select {
+	case <-ctx.doneObserved:
+	case <-time.After(2 * time.Second):
+		t.Fatal("waiting transaction did not reach context-aware gate")
 	}
-	if err := <-secondDone; !errors.Is(err, context.Canceled) {
-		t.Fatalf("waiting transaction: got %v want canceled", err)
+	cancel()
+
+	select {
+	case err := <-secondDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("waiting transaction: got %v want canceled", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("canceled waiting transaction remained blocked behind active callback")
 	}
 	select {
 	case <-callbackEntered:
 		t.Fatal("canceled waiting transaction entered callback")
 	default:
+	}
+
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first transaction: %v", err)
 	}
 }
