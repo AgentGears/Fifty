@@ -41,20 +41,23 @@ func TestScenarioFailureCannotPass(t *testing.T) {
 	}
 }
 
-func TestScenarioPanicBecomesFailureAndLaterScenarioRuns(t *testing.T) {
+func TestScenarioPanicsBecomeFailuresAndLaterScenarioRuns(t *testing.T) {
 	laterRan := false
 	report := RunScenarios(context.Background(), []Scenario{
-		{ID: "panic", Required: true, Run: func(context.Context) error { panic("boom") }},
+		{ID: "panic-value", Required: true, Run: func(context.Context) error { panic("boom") }},
+		{ID: "panic-nil", Required: true, Run: func(context.Context) error { panic(nil) }},
 		{ID: "later", Required: true, Run: func(context.Context) error { laterRan = true; return nil }},
 	})
 	if report.Passed() {
-		t.Fatalf("panicking scenario must not pass: %+v", report)
+		t.Fatalf("panicking scenarios must not pass: %+v", report)
 	}
-	if !strings.Contains(report.Results[0].Error, "scenario panic") {
-		t.Fatalf("panic was not recorded as scenario failure: %+v", report.Results[0])
+	for i := 0; i < 2; i++ {
+		if !strings.Contains(report.Results[i].Error, "scenario panic") {
+			t.Fatalf("panic was not recorded as scenario failure: %+v", report.Results[i])
+		}
 	}
-	if !laterRan || !report.Results[1].Passed {
-		t.Fatalf("later scenario did not execute after contained panic: %+v", report)
+	if !laterRan || !report.Results[2].Passed {
+		t.Fatalf("later scenario did not execute after contained panics: %+v", report)
 	}
 }
 

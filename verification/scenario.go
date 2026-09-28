@@ -91,12 +91,17 @@ func RunScenarios(ctx context.Context, scenarios []Scenario) Report {
 }
 
 func runScenario(ctx context.Context, run func(context.Context) error) (err error) {
+	returned := false
 	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("scenario panic: %v", recovered)
+		if returned {
+			return
 		}
+		recovered := recover()
+		err = fmt.Errorf("scenario panic: %v", recovered)
 	}()
-	return run(ctx)
+	err = run(ctx)
+	returned = true
+	return err
 }
 
 func RequirePassed(report Report) error {
