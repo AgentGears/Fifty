@@ -27,7 +27,9 @@ Before this increment can merge, the commit-bound verification evidence must inc
 - independent secondary review or an explicitly separated fallback secondary pass;
 - reconciliation of both review passes.
 
-Scenario runners execute synchronously and must honor context cancellation. The in-process harness does not abandon a timed-out runner in a background goroutine because that runner could continue mutating verification fixtures after failure was reported. A non-cooperative hang must therefore be bounded by a process-level wall-clock watchdog at the external verification boundary, where termination and failure evidence can be handled without claiming the scenario itself was safely stopped.
+Scenario runners execute synchronously and must honor context cancellation. Panic containment applies to the goroutine executing the scenario runner. If a scenario starts concurrent work, it must join that work before returning and must contain panics raised by its child goroutines. An uncontained child-goroutine panic is a process-level verification failure rather than a contained scenario result.
+
+The in-process harness does not abandon a timed-out runner in a background goroutine because that runner could continue mutating verification fixtures after failure was reported. A non-cooperative hang must therefore be bounded by a process-level wall-clock watchdog at the external verification boundary, where termination and failure evidence can be handled without claiming the scenario itself was safely stopped.
 
 The in-memory `Report` is the deterministic semantic result of scenario execution. Durable verification receipts and artifacts are produced by the external commit-bound verification boundary rather than by this bootstrap runner.
 
