@@ -1,36 +1,40 @@
-# G1 kernel bootstrap
+# Fifty implementation
 
-This increment establishes only the verification and canonical-store seams needed before canonical Workspace state is implemented.
+Fifty is developed as a solo-developer, AI-assisted product. The implementation process is intentionally lightweight: build one coherent capability increment, run the relevant deterministic/race/static checks available for the increment, perform a focused AI-assisted review, fix material defects, merge, and continue. Independent secondary review and external commit-bound verification are optional diagnostics rather than merge gates.
 
-It contains:
+## Current kernel
 
-- opaque semantic identifier primitives;
-- controllable time and identifier sources for deterministic verification;
-- the transactional canonical-store port;
-- an in-memory verification store with rollback, transaction-lifetime, stale-version, and context-cancelable serialization behavior;
-- a scenario runner with fail-closed cancellation, panic containment, and non-vacuous qualification semantics;
-- the minimal project module manifest needed for a clean checkout to resolve intra-project packages.
+Completed foundation:
 
-It deliberately does not contain Workspace, Principal, Interaction, specialist, work, memory, background execution, or external-effect implementations.
+- opaque semantic identifiers and controllable clocks;
+- transactional canonical-store seam plus in-memory verification store;
+- first-party filesystem-backed persistence with atomic publication, integrity checking, restart reconstruction, and backup/restore;
+- durable Workspace and Principal identity;
+- access/recovery credential rotation with digest-only persistence.
 
-## Verification boundary
+## CAP-102 increment A — canonical interaction history and bounded context
 
-The repository is expected to verify from a clean checkout under the runtime supplied by the approved external supply boundary.
+This increment introduces the first Conversation & Context implementation:
 
-Before this increment can merge, the commit-bound verification evidence must include:
+- `Interaction` is canonical history with explicit semantic identity, author attribution, direction, admission time, content reference, data classification, semantic references, and deletion state;
+- interaction history is durable across process/session replacement;
+- `ContextView` is a non-canonical copy derived from canonical Interaction state and is bounded by an explicit maximum interaction count;
+- mutating a `ContextView` cannot mutate canonical Interaction state;
+- exact semantic-reference resolution fails closed when a label is unresolved or maps to more than one semantic identity;
+- D2 admission fails closed until its conditional admission workflow exists;
+- D3 is never admitted to ordinary conversation state;
+- context regeneration excludes D2 and any non-`RECORDED` interaction state.
 
-- ordinary unit verification;
-- race/concurrency verification;
-- static analysis;
-- terminology-sovereignty validation;
-- exhaustive first-pass maintainer review;
-- independent secondary review or an explicitly separated fallback secondary pass;
-- reconciliation of both review passes.
+The storage representation intentionally aggregates Interaction objects inside one workspace-scoped canonical history record. Storage record identity is not semantic object identity; every Interaction retains its own Fifty semantic identifier and lifecycle fields.
 
-Scenario runners execute synchronously and must honor context cancellation. Panic containment applies to the goroutine executing the scenario runner. If a scenario starts concurrent work, it must join that work before returning and must contain panics raised by its child goroutines. An uncontained child-goroutine panic is a process-level verification failure rather than a contained scenario result.
+## Deliberate non-scope for this increment
 
-The in-process harness does not abandon a timed-out runner in a background goroutine because that runner could continue mutating verification fixtures after failure was reported. A non-cooperative hang must therefore be bounded by a process-level wall-clock watchdog at the external verification boundary, where termination and failure evidence can be handled without claiming the scenario itself was safely stopped.
+This increment does not choose or activate:
 
-The in-memory `Report` is the deterministic semantic result of scenario execution. Durable verification receipts and artifacts are produced by the external commit-bound verification boundary rather than by this bootstrap runner.
+- the exact Interaction deletion/tombstone implementation;
+- the D2 admission workflow or model-disclosure record;
+- fuzzy/similarity-based reference resolution;
+- memory, work, specialist, authority/effect, or unresolved-matter semantics;
+- an external content store or provider abstraction.
 
-No local-only wrapper or unrecorded source file may be required to compile the checked-in code.
+Those concerns should be added only when their owning capability or an explicit trust/data decision requires them.
